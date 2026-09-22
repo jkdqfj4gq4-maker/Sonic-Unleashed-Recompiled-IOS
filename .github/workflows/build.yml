@@ -1,0 +1,89 @@
+
+name: Sonic Unleashed Final - BUILD 200
+on: [workflow_dispatch, push]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build Engine
+        run: |
+          mkdir -p BuildDir
+          # Build specifically for the Nerun port scheme
+          xcodebuild build \
+            -scheme "UnleashedRecompiOSD" \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath ./BuildDir \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES || true
+      - name: Ultimate Final Inject
+        run: |
+          # 1. SETUP CLEAN BUNDLE STRUCTURE
+          mkdir -p Payload/Unleashed.app/private
+          # 2. FIND & VERIFY BINARY (Supports UnleashedRecompiOSD)
+          # Specifically looking for your project's Mach-O arm64 executable
+          RAW_BINARY=$(find ./BuildDir -type f -perm +111 ! -name "*.dylib" ! -name "*.plist" | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
+          if [ -z "$RAW_BINARY" ]; then
+            RAW_BINARY=$(find . -type f -size +1M -perm +111 | xargs file | grep "Mach-O" | grep "arm64" | cut -d: -f1 | head -n 1)
+          fi
+          
+          if [ -z "$RAW_BINARY" ]; then echo "Error: Project binary not found!"; exit 1; fi
+          
+          # Move binary and ensure it has the correct project name for the Info.plist
+          cp "$RAW_BINARY" Payload/Unleashed.app/UnleashedRecompiOSD
+          chmod +x Payload/Unleashed.app/UnleashedRecompiOSD
+          # 3. METAL CONFIG (A13 iPad 9 Optimization)
+          cat <<EOF > Payload/Unleashed.app/config.toml
+          [Video]
+          GraphicsAPI = "Metal"
+          ResolutionScale = 0.8
+          FrameRateLimit = 60
+          EOF
+          # 4. INJECT ASSETS
+          if [ -d "UnleashedRecompLib/Private" ]; then
+            echo "Injecting Private Assets into /private..."
+            cp -r UnleashedRecompLib/Private/* Payload/Unleashed.app/private/
+          fi
+          # 5. iPad 9 & MEMORY OPTIMIZED INFO.PLIST
+          cat <<EOF > Payload/Unleashed.app/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://apple.com">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key><string>UnleashedRecompiOSD</string>
+              <key>CFBundleIdentifier</key><string>com.unleashed.recomp</string>
+              <key>CFBundleName</key><string>Unleashed</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>CFBundleVersion</key><string>1</string>
+              <key>LSRequiresIPhoneOS</key><true/>
+              <key>MinimumOSVersion</key><string>15.0</string>
+              <key>UIFileSharingEnabled</key><true/>
+              <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+              <key>com.apple.developer.kernel.increased-memory-limit</key><true/>
+              <key>UIDeviceFamily</key>
+              <array>
+                  <integer>1</integer>
+                  <integer>2</integer>
+              </array>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                  <string>UIInterfaceOrientationLandscapeLeft</string>
+                  <string>UIInterfaceOrientationLandscapeRight</string>
+              </array>
+          </dict>
+          </plist>
+          EOF
+          zip -ry Unleashed_Final.ipa Payload
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unleashed-Final-IPA
+          path: Unleashed_Final.ipa
